@@ -1,0 +1,130 @@
+/* Logo, favicon, tema y colores fijos.
+   Requiere jsdom:  npm install --no-save jsdom
+   Uso:            node herramientas/prueba-marca.mjs */
+import { JSDOM, VirtualConsole } from 'jsdom';
+import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const errores=[];
+const dom=new JSDOM(await readFile(RAIZ+'/index.html','utf8'),
+  {url:'https://local.test/',virtualConsole:new VirtualConsole(),runScripts:'dangerously'});
+Object.assign(globalThis,{window:dom.window,document:dom.window.document,
+  localStorage:dom.window.localStorage,sessionStorage:dom.window.sessionStorage,
+  CustomEvent:dom.window.CustomEvent,Event:dom.window.Event});
+globalThis.fetch=async u=>{const k=String(u).replace(/^https?:\/\/[^/]+\//,'').replace(/^\.?\//,'');
+  if(k==='datos/firebase.json'||k==='api/base') return new Response('',{status:404});
+  try{return new Response(await readFile(RAIZ+'/'+k,'utf8'),{status:200})}catch{return new Response('',{status:404})}};
+const tema=await import(RAIZ+'/js/tema.js');
+await import(RAIZ+'/js/app.js');
+await new Promise(r=>setTimeout(r,400));
+const d=document;
+const paso=(n,f)=>{try{f();console.log('  ok  '+n)}catch(e){console.log('  MAL '+n+' → '+e.message);errores.push(n)}};
+const pasoA=async(n,f)=>{try{await f();console.log('  ok  '+n)}catch(e){console.log('  MAL '+n+' → '+e.message);errores.push(n)}};
+
+console.log('== marca ==');
+paso('el acceso lleva la marca, porque hay un solo emprendimiento', ()=>{
+  if(!d.querySelector('#marca-acceso img')) throw new Error('falta el logo en el ingreso');
+});
+paso('la barra lateral sí lleva el logo', ()=>{
+  if(!d.querySelector('.rail-tope .marca-logo')) throw new Error('falta en la barra lateral');
+});
+paso('el de la barra está encima de "Control de stock"', ()=>{
+  const tope=d.querySelector('.rail-tope');
+  const hijos=[...tope.children];
+  if(hijos.indexOf(tope.querySelector('.marca-logo')) > hijos.indexOf(tope.querySelector('h2')))
+    throw new Error('quedó debajo del título');
+});
+await pasoA('se dibuja un solo logo en la barra lateral', async()=>{
+  const marca = await import(RAIZ+'/js/marca.js');
+  marca.aplicarMarca('lima');
+  const imgs = d.querySelectorAll('#marca-logo img');
+  if(imgs.length!==1) throw new Error('imágenes: '+imgs.length);
+  if(!imgs[0].getAttribute('src').includes('lima-limon.png')) throw new Error('src: '+imgs[0].getAttribute('src'));
+});
+paso('el logo trae medidas propias', ()=>{
+  d.querySelectorAll('#marca-logo img').forEach(l=>{
+    if(!l.getAttribute('width') || !l.getAttribute('height'))
+      throw new Error('sin width/height: si el CSS no carga, se dibuja enorme');
+  });
+});
+
+paso('el favicon sigue al emprendimiento', ()=>{
+  const i=d.querySelector('link[rel="icon"]');
+  if(!i) throw new Error('sin favicon');
+  if(!/favicon-lima\.png/.test(i.href)) throw new Error('href: '+i.href);
+});
+
+console.log('== tema ==');
+paso('arranca en claro aunque el sistema esté en oscuro', ()=>{
+  if(tema.temaActual()!=='claro') throw new Error('arrancó en '+tema.temaActual());
+  if(tema.preferencia()!=='claro') throw new Error('preferencia: '+tema.preferencia());
+});
+paso('el botón alterna a oscuro', ()=>{
+  d.getElementById('cambiar-tema').click();
+  if(d.documentElement.dataset.tema!=='oscuro') throw new Error('no cambió');
+});
+paso('y vuelve a claro', ()=>{
+  d.getElementById('cambiar-tema').click();
+  if(d.documentElement.dataset.tema!=='claro') throw new Error('no volvió');
+});
+paso('el botón de la barra lateral también', ()=>{
+  d.getElementById('cambiar-tema-2').click();
+  if(d.documentElement.dataset.tema!=='oscuro') throw new Error('no cambió');
+});
+paso('queda recordado', ()=>{
+  if(localStorage.getItem('indumentaria.tema')!=='oscuro') throw new Error('no lo guardó');
+});
+paso('se puede elegir seguir al sistema', ()=>{
+  tema.aplicarTema('sistema');
+  if(tema.preferencia()!=='sistema') throw new Error('no guardó la preferencia');
+  if(!['claro','oscuro'].includes(tema.temaActual())) throw new Error('no resolvió a ninguno');
+});
+paso('un valor raro cae en claro', ()=>{
+  tema.aplicarTema('violeta');
+  if(tema.temaActual()!=='claro') throw new Error('quedó en '+tema.temaActual());
+});
+paso('la barra del navegador acompaña', ()=>{
+  const m=d.querySelector('meta[name="theme-color"]');
+  tema.aplicarTema('oscuro');
+  if(m.content!=='#12150C') throw new Error('en oscuro: '+m.content);
+  tema.aplicarTema('claro');
+  if(m.content!=='#DFE5B8') throw new Error('en claro: '+m.content);
+});
+paso('avisa el cambio a quien escuche', ()=>{
+  let visto=null;
+  d.addEventListener('tema:cambiado', e=>visto=e.detail);
+  tema.alternarTema();
+  if(visto!=='oscuro') throw new Error('no avisó');
+  tema.aplicarTema('claro');
+});
+
+console.log('== colores fijos ==');
+
+console.log('== paleta ==');
+paso('no quedan colores del tema anterior', async()=>{});
+{
+  const css=await readFile(RAIZ+'/css/estilos.css','utf8');
+  paso('ningún color fijo fuera de la paleta', ()=>{
+    /* Esto es lo que dejó pasar la barra superior gris en tema oscuro: la
+       prueba anterior buscaba colores concretos en vez de mirar si quedaba
+       alguno suelto. */
+    const ini=css.indexOf(':root{'), fin=css.indexOf('html{ scroll-padding');
+    const resto=css.slice(0,ini)+css.slice(fin);
+    /* Las rayas de Lima Limón se declaran como variable, igual que el resto. */
+    const sinVariables = resto.replace(/^\s*--[a-z-]+:[^;]+;/gm, '');
+    const sueltos=(sinVariables.match(/#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)/g)||[])
+      .filter(c=>c!=='#fff');
+    if(sueltos.length) throw new Error('fuera de la paleta: '+[...new Set(sueltos)].join(', '));
+  });
+  paso('el tema oscuro define todas las variables del claro', ()=>{
+    const claro=[...css.matchAll(/^\s*(--[a-z0-9-]+):/gmi)].map(m=>m[1]);
+    const bloqueOscuro=css.slice(css.indexOf('[data-tema="oscuro"]'), css.indexOf('html{ scroll-padding'));
+    const faltan=[...new Set(claro)].filter(v=>
+      !['--r-ch','--r','--r-gr','--rail'].includes(v) && !bloqueOscuro.includes(v+':'));
+    if(faltan.length) throw new Error('sin variante oscura: '+faltan.join(', '));
+  });
+}
+
+console.log('\n'+(errores.length?'FALLOS: '+errores.join(', '):'sin errores'));
+process.exit(errores.length?1:0);
